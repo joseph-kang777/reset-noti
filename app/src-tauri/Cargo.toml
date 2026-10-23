@@ -23,6 +23,8 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4.45", features = ["serde"] }
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
+log = "0.4.34"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -32,3 +34,6 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

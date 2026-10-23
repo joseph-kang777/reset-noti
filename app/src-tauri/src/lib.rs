@@ -1,6 +1,7 @@
 pub mod kst;
 pub mod model;
 pub mod rules;
+pub mod store;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
