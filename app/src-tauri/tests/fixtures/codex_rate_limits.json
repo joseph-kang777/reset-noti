@@ -1,0 +1,35 @@
+{
+  "accountId": "00000000-0000-0000-0000-000000000001",
+  "rateLimitResetCredits": {
+    "availableCount": 2,
+    "credits": [
+      {
+        "id": "RateLimitResetCredit_aaaa1111",
+        "resetType": "codexRateLimits",
+        "status": "available",
+        "grantedAt": 1790709211,
+        "expiresAt": 1793301211,
+        "title": "Full reset",
+        "description": "Thanks for using Codex! You've been granted one free rate limit reset."
+      },
+      {
+        "id": "RateLimitResetCredit_bbbb2222",
+        "resetType": "codexRateLimits",
+        "status": "available",
+        "grantedAt": 1791416486,
+        "expiresAt": 1794008486,
+        "title": "Full reset",
+        "description": "Thanks for using Codex! You've been granted one free rate limit reset."
+      },
+      {
+        "id": "RateLimitResetCredit_used",
+        "resetType": "codexRateLimits",
+        "status": "redeemed",
+        "grantedAt": 1790000000,
+        "expiresAt": 1792592000,
+        "title": "Full reset",
+        "description": "used"
+      }
+    ]
+  }
+}

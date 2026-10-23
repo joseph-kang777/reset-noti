@@ -1,0 +1,9 @@
+{
+  "account": { "type": "chatgpt", "email": "user@example.com", "planType": "pro" },
+  "requiresOpenaiAuth": true,
+  "workspaceRouting": {
+    "chatgptAccountId": "00000000-0000-0000-0000-000000000001",
+    "backendOrigin": "https://chatgpt.com",
+    "accountRoutingOverride": "NO_CONSTRAINT"
+  }
+}
