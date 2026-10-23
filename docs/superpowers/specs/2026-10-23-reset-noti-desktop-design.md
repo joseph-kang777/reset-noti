@@ -125,6 +125,17 @@ Claude(Anthropic)와 Codex(OpenAI)는 사용량 한도를 즉시 초기화해 �
 - 아이콘은 프로토타입의 `assets/claude.png`와 `assets/codex.png`를 재사용해도 된다.
 - 코드 서명. 하지 않으면 SmartScreen 경고가 뜬다는 점을 README에 안내한다.
 
+## 9.5 스파이크 결과 (2026-10-23, Task 1)
+
+- **Claude 로그인**: `CLAUDE_CONFIG_DIR=<dir> claude auth login`을 `CREATE_NO_WINDOW`, stdin을 null로 실행해도 브라우저가 열리고, 로그인이 끝나면 exit 0으로 종료된다(9초). 토큰 scope에 `user:profile`이 들어 있다. access token 수명은 약 **8시간**이다.
+- **Claude 갱신**: `claude auth status --json`으로는 **갱신되지 않는다**(FAIL). `claude -p "ok" --model haiku --max-turns 1`을 실행하면 토큰이 갱신되고 `expiresAt`이 미래 시각이 된다(PASS, 약 5초). 따라서 **B 경로로 확정**한다.
+- **Codex 로그인 방식 변경**: `codex login` 기본 방식은 `localhost:1455` 콜백을 쓰는데, 이 PC에서는 Windows 예약 포트 범위(1434–1533, Hyper-V/WinNAT)에 걸려 `os error 10013`으로 실패한다. 그래서 **`codex login --device-auth`로 고정**한다.
+  - stdout에 `https://auth.openai.com/codex/device`와 일회용 코드(예: `C6ER-XMU2I`, 15분 유효)가 ANSI 색 코드와 함께 출력된다. 앱은 색 코드를 제거하고 URL과 코드를 추출한 뒤 화면에 `코드 [복사] [브라우저 열기]`로 보여준다.
+  - 계정의 ChatGPT 보안 설정에서 "Codex 기기 코드 로그인"이 꺼져 있으면 브라우저에 오류가 뜨고, CLI는 코드가 만료될 때까지 기다린다. 앱은 코드 아래에 항상 이렇게 안내한다: `브라우저에서 오류가 나면 ChatGPT 보안 설정에서 기기 코드 로그인을 켜 주세요 [설정 열기]`(`https://chatgpt.com/#settings/Security`).
+  - 로그인이 끝나면 `Successfully logged in`을 출력하고 exit 0으로 종료된다.
+- **Codex 계정 정보**: `account/read`의 `result.account.email`, `result.account.planType`, `result.workspaceRouting.chatgptAccountId`를 쓴다. `account/rateLimits/read`의 `accountId`도 같은 값이다. 중복 판별 identity는 `chatgptAccountId`와 email을 함께 쓴다.
+- **CODEX_HOME 위치**: 임시 폴더 아래에 두면 경고가 나므로 `%APPDATA%` 아래에 둔다(8절 그대로).
+
 ## 10. 참고 자료
 
 - 프로토타입: `reset_noti.py`, `test_reset_noti.py`, `install.ps1`, `uninstall.ps1`
