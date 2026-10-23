@@ -4,6 +4,7 @@ pub mod codex;
 pub mod fetch;
 pub mod kst;
 pub mod model;
+pub mod notify;
 pub mod rules;
 pub mod store;
 
