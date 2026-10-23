@@ -7,6 +7,7 @@ pub mod kst;
 pub mod model;
 pub mod notify;
 pub mod rules;
+pub mod scheduler;
 pub mod store;
 
 #[tauri::command]
