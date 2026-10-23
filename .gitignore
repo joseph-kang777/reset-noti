@@ -6,3 +6,4 @@ __pycache__/
 app/node_modules/
 app/src-tauri/target/
 app/dist/
+.herdr-web-ui/
