@@ -1,0 +1,8 @@
+state.json
+reset_noti.log
+.superpowers/
+__pycache__/
+.pytest_cache/
+app/node_modules/
+app/src-tauri/target/
+app/dist/
