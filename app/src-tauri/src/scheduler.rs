@@ -124,6 +124,7 @@ impl Checker {
             let mut notes = Vec::new();
             let status = match result {
                 Ok(f) => {
+                    st.auth_fail_day = None;
                     notes = on_fetch(st, a.service, &label, &f.grants, now);
                     Status::Ok
                 }
@@ -190,9 +191,15 @@ impl Checker {
             .min()
     }
 
+    /// 화면용 — 진행 중인 확인을 기다리지 않는다 (state 파일은 원자적으로 저장됨)
     pub async fn views(&self) -> Vec<AccountView> {
-        let _guard = self.lock.lock().await;
         self.views_from(&self.store.load_state())
+    }
+
+    /// 확인 루프와 겹치면 안 되는 계정·상태 변경 (제거, 재인증 반영)
+    pub async fn exclusive<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _guard = self.lock.lock().await;
+        f()
     }
 
     fn views_from(&self, state: &HashMap<Uuid, crate::model::AccountState>) -> Vec<AccountView> {
@@ -274,6 +281,7 @@ mod tests {
 
     struct FakeFetch {
         by_dir: Mutex<HashMap<String, Result<Fetched, FetchError>>>,
+        delay_ms: Mutex<u64>,
     }
     impl Fetcher for FakeFetch {
         fn fetch<'a>(
@@ -289,8 +297,9 @@ mod tests {
                 .get(&key)
                 .cloned()
                 .unwrap_or(Err(FetchError::Other("없음".into())));
+            let delay = *self.delay_ms.lock().unwrap();
             Box::pin(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                 r
             })
         }
@@ -337,6 +346,7 @@ mod tests {
             store.save_accounts(&accounts).unwrap();
             let fetch = Arc::new(FakeFetch {
                 by_dir: Mutex::new(HashMap::new()),
+                delay_ms: Mutex::new(30),
             });
             let sink = Arc::new(FakeSink::default());
             let clock = Arc::new(FakeClock(Mutex::new(t0())));
@@ -469,6 +479,46 @@ mod tests {
             r.checker.next_wake().await,
             Some(t0() + Duration::hours(18))
         );
+    }
+
+    #[tokio::test]
+    async fn remove_waits_for_running_check() {
+        let r = Rig::new(1);
+        r.set(0, ok(&[100]));
+        let c = r.checker.clone();
+        let running = tokio::spawn(async move { c.check_all().await });
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let id = r.accounts[0].id;
+        let store = r.checker.store.clone();
+        r.checker.exclusive(move || crate::accounts::remove(&store, id)).await.unwrap();
+        running.await.unwrap();
+        assert!(r.checker.store.load_state().is_empty(), "제거한 계정 상태가 되살아남");
+    }
+
+    #[tokio::test]
+    async fn views_not_blocked_by_running_check() {
+        let r = Rig::new(1);
+        r.set(0, ok(&[100]));
+        *r.fetch.delay_ms.lock().unwrap() = 1000;
+        let c = r.checker.clone();
+        let running = tokio::spawn(async move { c.check_all().await });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let v = tokio::time::timeout(std::time::Duration::from_millis(200), r.checker.views()).await;
+        assert!(v.is_ok(), "확인 중에 화면 목록이 막힘");
+        running.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auth_note_again_after_recovery_same_day() {
+        let r = Rig::new(1);
+        r.set(0, Err(FetchError::Auth));
+        r.checker.check_all().await;
+        r.set(0, ok(&[]));
+        r.checker.check_all().await;
+        r.titles();
+        r.set(0, Err(FetchError::Auth));
+        r.checker.check_all().await;
+        assert_eq!(r.titles(), ["Codex(계정0) 재인증 필요"]);
     }
 
     #[tokio::test]

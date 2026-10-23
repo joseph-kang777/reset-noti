@@ -2,7 +2,7 @@
 
 use std::future::Future;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
 use std::time::Duration;
@@ -34,6 +34,8 @@ pub enum AddError {
     Timeout,
     /// 이미 추가된 계정의 라벨
     Duplicate(String),
+    /// 재인증에서 다른 계정으로 로그인됨 (그 계정의 이메일)
+    WrongAccount(String),
     Failed(String),
 }
 
@@ -44,6 +46,7 @@ impl std::fmt::Display for AddError {
             AddError::Cancelled => write!(f, "취소했어요"),
             AddError::Timeout => write!(f, "10분 안에 로그인이 끝나지 않았어요"),
             AddError::Duplicate(l) => write!(f, "이미 추가된 계정이에요 ({l})"),
+            AddError::WrongAccount(e) => write!(f, "다른 계정({e})으로 로그인됐어요. 원래 계정으로 다시 로그인해 주세요"),
             AddError::Failed(e) => write!(f, "로그인 실패: {e}"),
         }
     }
@@ -107,7 +110,7 @@ pub async fn add(
     let dir = store.account_dir(&account);
     std::fs::create_dir_all(&dir).map_err(|e| AddError::Failed(e.to_string()))?;
     let cleanup = |e: AddError| {
-        let _ = std::fs::remove_dir_all(&dir);
+        remove_dir_logged(&dir);
         e
     };
 
@@ -130,6 +133,73 @@ pub async fn add(
     Ok(account)
 }
 
+/// 재인증 로그인 결과. 확인 루프와 겹치지 않게 `commit`은 Checker 잠금 안에서 호출한다.
+pub struct PendingReauth {
+    id: Uuid,
+    tmp: PathBuf,
+    email: String,
+    identity: String,
+}
+
+/// 임시 폴더에 로그인하고 같은 계정인지 확인한다. 기존 로그인은 아직 건드리지 않는다.
+pub async fn reauth_login(
+    store: &Store,
+    runner: &dyn LoginRunner,
+    id: Uuid,
+    cancel: CancellationToken,
+    timeout: Duration,
+    on_event: &(dyn Fn(LoginEvent) + Send + Sync),
+) -> Result<PendingReauth, AddError> {
+    let account = store
+        .load_accounts()
+        .into_iter()
+        .find(|a| a.id == id)
+        .ok_or_else(|| AddError::Failed("계정을 찾을 수 없어요".into()))?;
+    let tmp = reauth_dir(store, &account);
+    remove_dir_logged(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|e| AddError::Failed(e.to_string()))?;
+    let result = login_bounded(runner, account.service, &tmp, cancel, timeout, on_event).await;
+    let (email, identity) = match result {
+        Ok(v) => v,
+        Err(e) => {
+            remove_dir_logged(&tmp);
+            return Err(e);
+        }
+    };
+    if account.identity.as_deref().is_some_and(|old| old != identity) {
+        remove_dir_logged(&tmp);
+        return Err(AddError::WrongAccount(email));
+    }
+    Ok(PendingReauth { id, tmp, email, identity })
+}
+
+impl PendingReauth {
+    /// 기존 로그인 폴더를 새 것으로 바꾸고 인증 실패 기록을 지운다.
+    pub fn commit(self, store: &Store) -> Result<(), AddError> {
+        let fail = |e: io::Error| AddError::Failed(e.to_string());
+        let mut accounts = store.load_accounts();
+        let Some(account) = accounts.iter_mut().find(|a| a.id == self.id) else {
+            remove_dir_logged(&self.tmp);
+            return Err(AddError::Failed("계정을 찾을 수 없어요".into()));
+        };
+        let dir = store.account_dir(account);
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).map_err(fail)?;
+        }
+        std::fs::rename(&self.tmp, &dir).map_err(fail)?;
+        account.email = Some(self.email);
+        account.identity = Some(self.identity);
+        store.save_accounts(&accounts).map_err(fail)?;
+
+        let mut state = store.load_state();
+        if let Some(st) = state.get_mut(&self.id) {
+            st.auth_fail_day = None;
+            store.save_state(&state).map_err(fail)?;
+        }
+        Ok(())
+    }
+}
+
 pub async fn reauth(
     store: &Store,
     runner: &dyn LoginRunner,
@@ -138,29 +208,21 @@ pub async fn reauth(
     timeout: Duration,
     on_event: &(dyn Fn(LoginEvent) + Send + Sync),
 ) -> Result<(), AddError> {
-    let mut accounts = store.load_accounts();
-    let account = accounts
-        .iter_mut()
-        .find(|a| a.id == id)
-        .ok_or_else(|| AddError::Failed("계정을 찾을 수 없어요".into()))?;
-    let dir = store.account_dir(account);
-    std::fs::create_dir_all(&dir).map_err(|e| AddError::Failed(e.to_string()))?;
-    let (email, identity) =
-        login_bounded(runner, account.service, &dir, cancel, timeout, on_event).await?;
-    account.email = Some(email);
-    account.identity = Some(identity);
-    store
-        .save_accounts(&accounts)
-        .map_err(|e| AddError::Failed(e.to_string()))?;
+    reauth_login(store, runner, id, cancel, timeout, on_event).await?.commit(store)
+}
 
-    let mut state = store.load_state();
-    if let Some(st) = state.get_mut(&id) {
-        st.auth_fail_day = None;
-        store
-            .save_state(&state)
-            .map_err(|e| AddError::Failed(e.to_string()))?;
+fn reauth_dir(store: &Store, a: &Account) -> PathBuf {
+    let mut p = store.account_dir(a).into_os_string();
+    p.push(".reauth");
+    PathBuf::from(p)
+}
+
+fn remove_dir_logged(dir: &Path) {
+    if dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(dir) {
+            log::warn!("폴더 삭제 실패 {}: {e}", dir.display());
+        }
     }
-    Ok(())
 }
 
 pub fn remove(store: &Store, id: Uuid) -> io::Result<()> {
@@ -255,10 +317,9 @@ impl LoginRunner for CliLogin {
             let mut cmd = cli::command(&exe);
             cmd.args(args)
                 .env(env, dir)
-                .current_dir(dir)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            let mut child = cmd.spawn().map_err(|e| AddError::Failed(e.to_string()))?;
+            let (mut child, _job) = cli::spawn(&mut cmd).map_err(|e| AddError::Failed(e.to_string()))?;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             pipe_lines(child.stdout.take().unwrap(), tx.clone());
             pipe_lines(child.stderr.take().unwrap(), tx);
@@ -530,6 +591,29 @@ mod tests {
         assert!(!s.account_dir(&a).exists());
         assert!(s.load_accounts().is_empty());
         assert!(s.load_state().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reauth_into_different_account_is_rejected_and_keeps_old_login() {
+        let (_d, s) = store();
+        let a = add(&s, &Fake::ok("a@x", "A"), Service::Codex, CancellationToken::new(), Duration::from_secs(5), &noop).await.unwrap();
+        let dir = s.account_dir(&a);
+        std::fs::write(dir.join("auth.json"), "old").unwrap();
+        let r = reauth(&s, &Fake::ok("b@x", "B"), a.id, CancellationToken::new(), Duration::from_secs(5), &noop).await;
+        assert_eq!(r.unwrap_err(), AddError::WrongAccount("b@x".into()));
+        assert_eq!(std::fs::read_to_string(dir.join("auth.json")).unwrap(), "old");
+        assert_eq!(s.load_accounts()[0].identity.as_deref(), Some("A"));
+        assert_eq!(account_dirs(&s), 1, "임시 재인증 폴더가 남으면 안 됨");
+    }
+
+    #[tokio::test]
+    async fn reauth_same_account_replaces_login() {
+        let (_d, s) = store();
+        let a = add(&s, &Fake::ok("a@x", "A"), Service::Codex, CancellationToken::new(), Duration::from_secs(5), &noop).await.unwrap();
+        std::fs::write(s.account_dir(&a).join("auth.json"), "old").unwrap();
+        reauth(&s, &Fake::ok("a@x", "A"), a.id, CancellationToken::new(), Duration::from_secs(5), &noop).await.unwrap();
+        assert!(!s.account_dir(&a).join("auth.json").exists(), "새 로그인 폴더로 교체돼야 함");
+        assert_eq!(account_dirs(&s), 1);
     }
 
     #[tokio::test]

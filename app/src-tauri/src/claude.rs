@@ -86,8 +86,7 @@ pub async fn ensure_fresh_with(dir: &Path, exe: &Path) -> Result<(), FetchError>
     log::info!("claude 토큰 갱신 시도: {}", dir.display());
     let mut cmd = cli::command(exe);
     cmd.args(["-p", "ok", "--model", "haiku", "--max-turns", "1"])
-        .env("CLAUDE_CONFIG_DIR", dir)
-        .current_dir(dir);
+        .env("CLAUDE_CONFIG_DIR", dir);
     if let Err(e) = cli::run_ok(cmd, Duration::from_secs(60)).await {
         log::warn!("claude 토큰 갱신 실패: {e}");
     }
@@ -107,8 +106,7 @@ pub async fn whoami_dir(dir: &Path) -> Result<(String, String), FetchError> {
 async fn whoami(dir: &Path, exe: &Path) -> Result<(String, String), FetchError> {
     let mut cmd = cli::command(exe);
     cmd.args(["auth", "status", "--json"])
-        .env("CLAUDE_CONFIG_DIR", dir)
-        .current_dir(dir);
+        .env("CLAUDE_CONFIG_DIR", dir);
     let v = cli::run_json(cmd, Duration::from_secs(30))
         .await
         .map_err(|e| FetchError::Other(format!("claude auth status: {e}")))?;

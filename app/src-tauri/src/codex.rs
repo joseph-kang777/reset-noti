@@ -29,9 +29,8 @@ async fn rpc(exe: &Path, dir: &Path) -> Result<Fetched, FetchError> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| FetchError::Other(format!("codex 실행 실패: {e}")))?;
+    let (mut child, _job) =
+        cli::spawn(&mut cmd).map_err(|e| FetchError::Other(format!("codex 실행 실패: {e}")))?;
     let mut stdin = child.stdin.take().unwrap();
     let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
 

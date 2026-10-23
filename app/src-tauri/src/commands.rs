@@ -103,9 +103,11 @@ pub async fn add_account(
 pub async fn reauth(app: AppHandle, state: State<'_, AppState>, id: Uuid) -> Result<(), String> {
     let token = new_login(&state);
     let sink = login_sink(app.clone());
-    accounts::reauth(&state.store, &CliLogin, id, token, LOGIN_TIMEOUT, &sink)
+    let pending = accounts::reauth_login(&state.store, &CliLogin, id, token, LOGIN_TIMEOUT, &sink)
         .await
         .map_err(|e| e.to_string())?;
+    let store = state.store.clone();
+    state.checker.exclusive(move || pending.commit(&store)).await.map_err(|e| e.to_string())?;
     recheck(&app, state.checker.clone());
     Ok(())
 }
@@ -118,12 +120,9 @@ pub fn cancel_login(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-pub async fn remove_account(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    id: Uuid,
-) -> Result<(), String> {
-    accounts::remove(&state.store, id).map_err(|e| e.to_string())?;
+pub async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: Uuid) -> Result<(), String> {
+    let store = state.store.clone();
+    state.checker.exclusive(move || accounts::remove(&store, id)).await.map_err(|e| e.to_string())?;
     emit_accounts(&app, &state.checker.views().await);
     Ok(())
 }
