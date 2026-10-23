@@ -3,12 +3,18 @@
 use std::path::Path;
 
 fn scan(dir: &Path, exts: &[&str], hits: &mut Vec<String>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
             scan(&p, exts, hits);
-        } else if p.extension().and_then(|x| x.to_str()).is_some_and(|x| exts.contains(&x)) {
+        } else if p
+            .extension()
+            .and_then(|x| x.to_str())
+            .is_some_and(|x| exts.contains(&x))
+        {
             let text = std::fs::read_to_string(&p).unwrap_or_default();
             for bad in ["consume", "reset_rate_limits", "rateLimitResetCredit/"] {
                 if text.contains(bad) {

@@ -1,43 +1,72 @@
 <!doctype html>
-<html lang="en">
+<html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>리셋권 알림</title>
     <script type="module" src="/src/main.ts" defer></script>
   </head>
-
   <body>
-    <main class="container">
-      <h1>Welcome to Tauri</h1>
+    <main>
+      <header class="top">
+        <div>
+          <h1>리셋권 알림</h1>
+          <p class="muted">Claude · Codex 계정의 리셋권이 생기거나 만료가 다가오면 알려드려요.</p>
+        </div>
+        <div class="top-actions">
+          <label class="switch" title="Windows 로그온 시 자동 시작">
+            <input type="checkbox" id="autostart" />
+            <span>자동 시작</span>
+          </label>
+          <button id="check-now" class="btn">지금 확인</button>
+        </div>
+      </header>
 
-      <div class="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/src/assets/vite.svg" class="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img
-            src="/src/assets/tauri.svg"
-            class="logo tauri"
-            alt="Tauri logo"
-          />
-        </a>
-        <a href="https://www.typescriptlang.org/docs" target="_blank">
-          <img
-            src="/src/assets/typescript.svg"
-            class="logo typescript"
-            alt="typescript logo"
-          />
-        </a>
-      </div>
-      <p>Click on the Tauri logo to learn more about the framework</p>
+      <section class="card" data-service="claude">
+        <div class="card-head">
+          <img src="/src/assets/claude.png" alt="" class="logo" />
+          <h2>Claude</h2>
+          <span class="spacer"></span>
+          <button class="btn add" data-service="claude">+ 계정 추가</button>
+        </div>
+        <p class="cli-missing muted" hidden>Claude Code CLI가 필요합니다. 설치한 뒤 앱을 다시 열어 주세요.</p>
+        <ul class="accounts"></ul>
+      </section>
 
-      <form class="row" id="greet-form">
-        <input id="greet-input" placeholder="Enter a name..." />
-        <button type="submit">Greet</button>
-      </form>
-      <p id="greet-msg"></p>
+      <section class="card" data-service="codex">
+        <div class="card-head">
+          <img src="/src/assets/codex.png" alt="" class="logo" />
+          <h2>Codex</h2>
+          <span class="spacer"></span>
+          <button class="btn add" data-service="codex">+ 계정 추가</button>
+        </div>
+        <p class="cli-missing muted" hidden>Codex CLI가 필요합니다. 설치한 뒤 앱을 다시 열어 주세요.</p>
+        <ul class="accounts"></ul>
+      </section>
     </main>
+
+    <div id="login" class="overlay" hidden>
+      <div class="dialog">
+        <h3 id="login-title">브라우저에서 로그인해 주세요…</h3>
+        <div id="device" hidden>
+          <p class="muted">아래 코드를 브라우저 화면에 입력하세요.</p>
+          <div class="code" id="device-code"></div>
+          <div class="row">
+            <button class="btn" id="copy-code">복사</button>
+            <button class="btn" id="open-device">브라우저 열기</button>
+          </div>
+          <p class="hint">
+            브라우저에서 오류가 나면 ChatGPT 보안 설정에서 기기 코드 로그인을 켜 주세요.
+            <a href="#" id="open-security">설정 열기</a>
+          </p>
+        </div>
+        <div class="row end">
+          <button class="btn ghost" id="cancel-login">취소</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
   </body>
 </html>

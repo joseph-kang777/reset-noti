@@ -59,9 +59,18 @@ impl From<FetchError> for AddError {
 }
 
 pub trait LoginRunner: Send + Sync {
-    fn login<'a>(&'a self, svc: Service, dir: &'a Path, on_event: &'a (dyn Fn(LoginEvent) + Send + Sync)) -> BoxFut<'a, Result<(), AddError>>;
+    fn login<'a>(
+        &'a self,
+        svc: Service,
+        dir: &'a Path,
+        on_event: &'a (dyn Fn(LoginEvent) + Send + Sync),
+    ) -> BoxFut<'a, Result<(), AddError>>;
     /// (email, identity)
-    fn identify<'a>(&'a self, svc: Service, dir: &'a Path) -> BoxFut<'a, Result<(String, String), AddError>>;
+    fn identify<'a>(
+        &'a self,
+        svc: Service,
+        dir: &'a Path,
+    ) -> BoxFut<'a, Result<(String, String), AddError>>;
 }
 
 async fn login_bounded(
@@ -87,7 +96,14 @@ pub async fn add(
     timeout: Duration,
     on_event: &(dyn Fn(LoginEvent) + Send + Sync),
 ) -> Result<Account, AddError> {
-    let mut account = Account { id: Uuid::new_v4(), service: svc, alias: None, email: None, identity: None, added_at: Utc::now() };
+    let mut account = Account {
+        id: Uuid::new_v4(),
+        service: svc,
+        alias: None,
+        email: None,
+        identity: None,
+        added_at: Utc::now(),
+    };
     let dir = store.account_dir(&account);
     std::fs::create_dir_all(&dir).map_err(|e| AddError::Failed(e.to_string()))?;
     let cleanup = |e: AddError| {
@@ -95,15 +111,22 @@ pub async fn add(
         e
     };
 
-    let (email, identity) = login_bounded(runner, svc, &dir, cancel, timeout, on_event).await.map_err(cleanup)?;
+    let (email, identity) = login_bounded(runner, svc, &dir, cancel, timeout, on_event)
+        .await
+        .map_err(cleanup)?;
     let mut accounts = store.load_accounts();
-    if let Some(dup) = accounts.iter().find(|a| a.identity.as_deref() == Some(identity.as_str())) {
+    if let Some(dup) = accounts
+        .iter()
+        .find(|a| a.identity.as_deref() == Some(identity.as_str()))
+    {
         return Err(cleanup(AddError::Duplicate(dup.label())));
     }
     account.email = Some(email);
     account.identity = Some(identity);
     accounts.push(account.clone());
-    store.save_accounts(&accounts).map_err(|e| cleanup(AddError::Failed(e.to_string())))?;
+    store
+        .save_accounts(&accounts)
+        .map_err(|e| cleanup(AddError::Failed(e.to_string())))?;
     Ok(account)
 }
 
@@ -116,18 +139,26 @@ pub async fn reauth(
     on_event: &(dyn Fn(LoginEvent) + Send + Sync),
 ) -> Result<(), AddError> {
     let mut accounts = store.load_accounts();
-    let account = accounts.iter_mut().find(|a| a.id == id).ok_or_else(|| AddError::Failed("계정을 찾을 수 없어요".into()))?;
+    let account = accounts
+        .iter_mut()
+        .find(|a| a.id == id)
+        .ok_or_else(|| AddError::Failed("계정을 찾을 수 없어요".into()))?;
     let dir = store.account_dir(account);
     std::fs::create_dir_all(&dir).map_err(|e| AddError::Failed(e.to_string()))?;
-    let (email, identity) = login_bounded(runner, account.service, &dir, cancel, timeout, on_event).await?;
+    let (email, identity) =
+        login_bounded(runner, account.service, &dir, cancel, timeout, on_event).await?;
     account.email = Some(email);
     account.identity = Some(identity);
-    store.save_accounts(&accounts).map_err(|e| AddError::Failed(e.to_string()))?;
+    store
+        .save_accounts(&accounts)
+        .map_err(|e| AddError::Failed(e.to_string()))?;
 
     let mut state = store.load_state();
     if let Some(st) = state.get_mut(&id) {
         st.auth_fail_day = None;
-        store.save_state(&state).map_err(|e| AddError::Failed(e.to_string()))?;
+        store
+            .save_state(&state)
+            .map_err(|e| AddError::Failed(e.to_string()))?;
     }
     Ok(())
 }
@@ -152,7 +183,9 @@ pub fn remove(store: &Store, id: Uuid) -> io::Result<()> {
 pub fn rename(store: &Store, id: Uuid, alias: Option<String>) -> io::Result<()> {
     let mut accounts = store.load_accounts();
     if let Some(a) = accounts.iter_mut().find(|a| a.id == id) {
-        a.alias = alias.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        a.alias = alias
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
     }
     store.save_accounts(&accounts)
 }
@@ -172,11 +205,17 @@ impl DeviceCodeParser {
             self.url = Some(s.to_string());
             return None;
         }
-        let is_code = (8..=14).contains(&s.len()) && s.contains('-') && s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-');
+        let is_code = (8..=14).contains(&s.len())
+            && s.contains('-')
+            && s.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-');
         if is_code && !self.done {
             if let Some(url) = &self.url {
                 self.done = true;
-                return Some(LoginEvent::DeviceCode { url: url.clone(), code: s.to_string() });
+                return Some(LoginEvent::DeviceCode {
+                    url: url.clone(),
+                    code: s.to_string(),
+                });
             }
         }
         None
@@ -186,7 +225,10 @@ impl DeviceCodeParser {
 /// 실제 러너: `claude auth login` / `codex login --device-auth`
 pub struct CliLogin;
 
-fn pipe_lines<R: AsyncRead + Unpin + Send + 'static>(r: R, tx: tokio::sync::mpsc::UnboundedSender<String>) {
+fn pipe_lines<R: AsyncRead + Unpin + Send + 'static>(
+    r: R,
+    tx: tokio::sync::mpsc::UnboundedSender<String>,
+) {
     tokio::spawn(async move {
         let mut lines = BufReader::new(r).lines();
         while let Ok(Some(l)) = lines.next_line().await {
@@ -198,7 +240,12 @@ fn pipe_lines<R: AsyncRead + Unpin + Send + 'static>(r: R, tx: tokio::sync::mpsc
 }
 
 impl LoginRunner for CliLogin {
-    fn login<'a>(&'a self, svc: Service, dir: &'a Path, on_event: &'a (dyn Fn(LoginEvent) + Send + Sync)) -> BoxFut<'a, Result<(), AddError>> {
+    fn login<'a>(
+        &'a self,
+        svc: Service,
+        dir: &'a Path,
+        on_event: &'a (dyn Fn(LoginEvent) + Send + Sync),
+    ) -> BoxFut<'a, Result<(), AddError>> {
         Box::pin(async move {
             let (name, env, args): (_, _, &[&str]) = match svc {
                 Service::Claude => ("claude", "CLAUDE_CONFIG_DIR", &["auth", "login"]),
@@ -206,7 +253,11 @@ impl LoginRunner for CliLogin {
             };
             let exe = cli::resolve_cli(name).ok_or(AddError::NotInstalled)?;
             let mut cmd = cli::command(&exe);
-            cmd.args(args).env(env, dir).current_dir(dir).stdout(Stdio::piped()).stderr(Stdio::piped());
+            cmd.args(args)
+                .env(env, dir)
+                .current_dir(dir)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
             let mut child = cmd.spawn().map_err(|e| AddError::Failed(e.to_string()))?;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             pipe_lines(child.stdout.take().unwrap(), tx.clone());
@@ -223,7 +274,10 @@ impl LoginRunner for CliLogin {
                     tail.remove(0);
                 }
             }
-            let status = child.wait().await.map_err(|e| AddError::Failed(e.to_string()))?;
+            let status = child
+                .wait()
+                .await
+                .map_err(|e| AddError::Failed(e.to_string()))?;
             if status.success() {
                 Ok(())
             } else {
@@ -232,7 +286,11 @@ impl LoginRunner for CliLogin {
         })
     }
 
-    fn identify<'a>(&'a self, svc: Service, dir: &'a Path) -> BoxFut<'a, Result<(String, String), AddError>> {
+    fn identify<'a>(
+        &'a self,
+        svc: Service,
+        dir: &'a Path,
+    ) -> BoxFut<'a, Result<(String, String), AddError>> {
         Box::pin(async move {
             match svc {
                 Service::Claude => Ok(crate::claude::whoami_dir(dir).await?),
@@ -264,26 +322,44 @@ mod tests {
 
     impl Fake {
         fn ok(email: &str, identity: &str) -> Self {
-            Fake { login: Mutex::new(Some(Ok(()))), who: (email.into(), identity.into()) }
+            Fake {
+                login: Mutex::new(Some(Ok(()))),
+                who: (email.into(), identity.into()),
+            }
         }
         fn hang() -> Self {
-            Fake { login: Mutex::new(None), who: ("x".into(), "x".into()) }
+            Fake {
+                login: Mutex::new(None),
+                who: ("x".into(), "x".into()),
+            }
         }
     }
 
     impl LoginRunner for Fake {
-        fn login<'a>(&'a self, _svc: Service, dir: &'a Path, on_event: &'a (dyn Fn(LoginEvent) + Send + Sync)) -> BoxFut<'a, Result<(), AddError>> {
+        fn login<'a>(
+            &'a self,
+            _svc: Service,
+            dir: &'a Path,
+            on_event: &'a (dyn Fn(LoginEvent) + Send + Sync),
+        ) -> BoxFut<'a, Result<(), AddError>> {
             let r = self.login.lock().unwrap().clone();
             Box::pin(async move {
                 assert!(dir.exists(), "로그인 전에 계정 디렉터리가 있어야 함");
-                on_event(LoginEvent::DeviceCode { url: "https://auth.openai.com/codex/device".into(), code: "AAAA-BBBBB".into() });
+                on_event(LoginEvent::DeviceCode {
+                    url: "https://auth.openai.com/codex/device".into(),
+                    code: "AAAA-BBBBB".into(),
+                });
                 match r {
                     Some(r) => r,
                     None => std::future::pending().await,
                 }
             })
         }
-        fn identify<'a>(&'a self, _svc: Service, _dir: &'a Path) -> BoxFut<'a, Result<(String, String), AddError>> {
+        fn identify<'a>(
+            &'a self,
+            _svc: Service,
+            _dir: &'a Path,
+        ) -> BoxFut<'a, Result<(String, String), AddError>> {
             let w = self.who.clone();
             Box::pin(async move { Ok(w) })
         }
@@ -296,7 +372,9 @@ mod tests {
     }
 
     fn account_dirs(s: &Store) -> usize {
-        std::fs::read_dir(s.root.join("accounts")).map(|r| r.count()).unwrap_or(0)
+        std::fs::read_dir(s.root.join("accounts"))
+            .map(|r| r.count())
+            .unwrap_or(0)
     }
 
     fn noop(_: LoginEvent) {}
@@ -304,7 +382,16 @@ mod tests {
     #[tokio::test]
     async fn successful_add_saves_account_with_email() {
         let (_d, s) = store();
-        let a = add(&s, &Fake::ok("a@b.c", "codex:1:a@b.c"), Service::Codex, CancellationToken::new(), Duration::from_secs(5), &noop).await.unwrap();
+        let a = add(
+            &s,
+            &Fake::ok("a@b.c", "codex:1:a@b.c"),
+            Service::Codex,
+            CancellationToken::new(),
+            Duration::from_secs(5),
+            &noop,
+        )
+        .await
+        .unwrap();
         assert_eq!(a.email.as_deref(), Some("a@b.c"));
         assert_eq!(s.load_accounts().len(), 1);
         assert!(s.account_dir(&a).exists());
@@ -315,8 +402,23 @@ mod tests {
         let (_d, s) = store();
         let seen = Mutex::new(Vec::new());
         let on = |e: LoginEvent| seen.lock().unwrap().push(e);
-        add(&s, &Fake::ok("a@b.c", "i"), Service::Codex, CancellationToken::new(), Duration::from_secs(5), &on).await.unwrap();
-        assert_eq!(seen.lock().unwrap()[0], LoginEvent::DeviceCode { url: "https://auth.openai.com/codex/device".into(), code: "AAAA-BBBBB".into() });
+        add(
+            &s,
+            &Fake::ok("a@b.c", "i"),
+            Service::Codex,
+            CancellationToken::new(),
+            Duration::from_secs(5),
+            &on,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            seen.lock().unwrap()[0],
+            LoginEvent::DeviceCode {
+                url: "https://auth.openai.com/codex/device".into(),
+                code: "AAAA-BBBBB".into()
+            }
+        );
     }
 
     #[tokio::test]
@@ -328,7 +430,15 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
             c2.cancel();
         });
-        let r = add(&s, &Fake::hang(), Service::Claude, cancel, Duration::from_secs(5), &noop).await;
+        let r = add(
+            &s,
+            &Fake::hang(),
+            Service::Claude,
+            cancel,
+            Duration::from_secs(5),
+            &noop,
+        )
+        .await;
         assert_eq!(r.unwrap_err(), AddError::Cancelled);
         assert_eq!(account_dirs(&s), 0);
         assert!(s.load_accounts().is_empty());
@@ -337,7 +447,15 @@ mod tests {
     #[tokio::test]
     async fn timeout_removes_dir() {
         let (_d, s) = store();
-        let r = add(&s, &Fake::hang(), Service::Claude, CancellationToken::new(), Duration::from_millis(50), &noop).await;
+        let r = add(
+            &s,
+            &Fake::hang(),
+            Service::Claude,
+            CancellationToken::new(),
+            Duration::from_millis(50),
+            &noop,
+        )
+        .await;
         assert_eq!(r.unwrap_err(), AddError::Timeout);
         assert_eq!(account_dirs(&s), 0);
     }
@@ -345,17 +463,49 @@ mod tests {
     #[tokio::test]
     async fn failed_login_removes_dir() {
         let (_d, s) = store();
-        let f = Fake { login: Mutex::new(Some(Err(AddError::Failed("boom".into())))), who: ("x".into(), "x".into()) };
-        assert_eq!(add(&s, &f, Service::Claude, CancellationToken::new(), Duration::from_secs(5), &noop).await.unwrap_err(), AddError::Failed("boom".into()));
+        let f = Fake {
+            login: Mutex::new(Some(Err(AddError::Failed("boom".into())))),
+            who: ("x".into(), "x".into()),
+        };
+        assert_eq!(
+            add(
+                &s,
+                &f,
+                Service::Claude,
+                CancellationToken::new(),
+                Duration::from_secs(5),
+                &noop
+            )
+            .await
+            .unwrap_err(),
+            AddError::Failed("boom".into())
+        );
         assert_eq!(account_dirs(&s), 0);
     }
 
     #[tokio::test]
     async fn duplicate_identity_is_rejected() {
         let (_d, s) = store();
-        let a = add(&s, &Fake::ok("a@b.c", "same"), Service::Codex, CancellationToken::new(), Duration::from_secs(5), &noop).await.unwrap();
+        let a = add(
+            &s,
+            &Fake::ok("a@b.c", "same"),
+            Service::Codex,
+            CancellationToken::new(),
+            Duration::from_secs(5),
+            &noop,
+        )
+        .await
+        .unwrap();
         rename(&s, a.id, Some("회사".into())).unwrap();
-        let r = add(&s, &Fake::ok("a@b.c", "same"), Service::Codex, CancellationToken::new(), Duration::from_secs(5), &noop).await;
+        let r = add(
+            &s,
+            &Fake::ok("a@b.c", "same"),
+            Service::Codex,
+            CancellationToken::new(),
+            Duration::from_secs(5),
+            &noop,
+        )
+        .await;
         assert_eq!(r.unwrap_err(), AddError::Duplicate("회사".into()));
         assert_eq!(account_dirs(&s), 1);
         assert_eq!(s.load_accounts().len(), 1);
@@ -364,8 +514,18 @@ mod tests {
     #[tokio::test]
     async fn remove_deletes_dir_list_and_state() {
         let (_d, s) = store();
-        let a = add(&s, &Fake::ok("a@b.c", "i"), Service::Codex, CancellationToken::new(), Duration::from_secs(5), &noop).await.unwrap();
-        s.save_state(&HashMap::from([(a.id, AccountState::default())])).unwrap();
+        let a = add(
+            &s,
+            &Fake::ok("a@b.c", "i"),
+            Service::Codex,
+            CancellationToken::new(),
+            Duration::from_secs(5),
+            &noop,
+        )
+        .await
+        .unwrap();
+        s.save_state(&HashMap::from([(a.id, AccountState::default())]))
+            .unwrap();
         remove(&s, a.id).unwrap();
         assert!(!s.account_dir(&a).exists());
         assert!(s.load_accounts().is_empty());
@@ -375,10 +535,31 @@ mod tests {
     #[tokio::test]
     async fn reauth_clears_auth_fail_day() {
         let (_d, s) = store();
-        let a = add(&s, &Fake::ok("a@b.c", "i"), Service::Codex, CancellationToken::new(), Duration::from_secs(5), &noop).await.unwrap();
-        let st = AccountState { auth_fail_day: Some("2026-10-23".into()), ..Default::default() };
+        let a = add(
+            &s,
+            &Fake::ok("a@b.c", "i"),
+            Service::Codex,
+            CancellationToken::new(),
+            Duration::from_secs(5),
+            &noop,
+        )
+        .await
+        .unwrap();
+        let st = AccountState {
+            auth_fail_day: Some("2026-10-23".into()),
+            ..Default::default()
+        };
         s.save_state(&HashMap::from([(a.id, st)])).unwrap();
-        reauth(&s, &Fake::ok("a@b.c", "i"), a.id, CancellationToken::new(), Duration::from_secs(5), &noop).await.unwrap();
+        reauth(
+            &s,
+            &Fake::ok("a@b.c", "i"),
+            a.id,
+            CancellationToken::new(),
+            Duration::from_secs(5),
+            &noop,
+        )
+        .await
+        .unwrap();
         assert_eq!(s.load_state()[&a.id].auth_fail_day, None);
     }
 
@@ -387,6 +568,12 @@ mod tests {
         let out = "Welcome to Codex [v\u{1b}[90m0.163.0\u{1b}[0m]\n1. Open this link in your browser and sign in to your account\n   \u{1b}[94mhttps://auth.openai.com/codex/device\u{1b}[0m\n\n2. Enter this one-time code \u{1b}[90m(expires in 15 minutes)\u{1b}[0m\n   \u{1b}[94mC6ER-XMU2I\u{1b}[0m\n";
         let mut p = DeviceCodeParser::default();
         let events: Vec<_> = out.lines().filter_map(|l| p.feed(l)).collect();
-        assert_eq!(events, [LoginEvent::DeviceCode { url: "https://auth.openai.com/codex/device".into(), code: "C6ER-XMU2I".into() }]);
+        assert_eq!(
+            events,
+            [LoginEvent::DeviceCode {
+                url: "https://auth.openai.com/codex/device".into(),
+                code: "C6ER-XMU2I".into()
+            }]
+        );
     }
 }

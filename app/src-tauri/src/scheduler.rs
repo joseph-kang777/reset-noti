@@ -94,8 +94,20 @@ pub struct Checker {
 }
 
 impl Checker {
-    pub fn new(store: Store, fetcher: Arc<dyn Fetcher>, sink: Arc<dyn Sink>, clock: Arc<dyn Clock>) -> Checker {
-        Checker { store, lock: tokio::sync::Mutex::new(()), status: Mutex::new(HashMap::new()), fetcher, sink, clock }
+    pub fn new(
+        store: Store,
+        fetcher: Arc<dyn Fetcher>,
+        sink: Arc<dyn Sink>,
+        clock: Arc<dyn Clock>,
+    ) -> Checker {
+        Checker {
+            store,
+            lock: tokio::sync::Mutex::new(()),
+            status: Mutex::new(HashMap::new()),
+            fetcher,
+            sink,
+            clock,
+        }
     }
 
     pub async fn check_all(&self) -> Vec<AccountView> {
@@ -152,7 +164,9 @@ impl Checker {
         let mut state = self.store.load_state();
         let mut changed = false;
         for a in self.store.load_accounts() {
-            let Some(st) = state.get_mut(&a.id) else { continue };
+            let Some(st) = state.get_mut(&a.id) else {
+                continue;
+            };
             for n in expiry_notes(st, a.service, &a.label(), now) {
                 changed = true;
                 log::info!("알림: {} | {}", n.title, n.body);
@@ -169,7 +183,11 @@ impl Checker {
     pub async fn next_wake(&self) -> Option<DateTime<Utc>> {
         let _guard = self.lock.lock().await;
         let now = self.clock.now();
-        self.store.load_state().values().filter_map(|st| next_alert_at(st, now)).min()
+        self.store
+            .load_state()
+            .values()
+            .filter_map(|st| next_alert_at(st, now))
+            .min()
     }
 
     pub async fn views(&self) -> Vec<AccountView> {
@@ -220,8 +238,12 @@ pub fn spawn_loops(checker: Arc<Checker>, on_change: Arc<dyn Fn(Vec<AccountView>
     tauri::async_runtime::spawn(async move {
         loop {
             let before = Utc::now();
-            let until_alert = checker.next_wake().await.and_then(|t| (t - before).to_std().ok());
-            let nap = until_alert.map_or(MAX_SLEEP, |d| d.min(MAX_SLEEP)) + StdDuration::from_millis(500);
+            let until_alert = checker
+                .next_wake()
+                .await
+                .and_then(|t| (t - before).to_std().ok());
+            let nap =
+                until_alert.map_or(MAX_SLEEP, |d| d.min(MAX_SLEEP)) + StdDuration::from_millis(500);
             tokio::time::sleep(nap).await;
             let elapsed = Utc::now() - before;
             if elapsed > chrono::Duration::from_std(nap).unwrap_or_default() + WAKE_JUMP {
@@ -254,9 +276,19 @@ mod tests {
         by_dir: Mutex<HashMap<String, Result<Fetched, FetchError>>>,
     }
     impl Fetcher for FakeFetch {
-        fn fetch<'a>(&'a self, _svc: Service, dir: &'a Path) -> BoxFut<'a, Result<Fetched, FetchError>> {
+        fn fetch<'a>(
+            &'a self,
+            _svc: Service,
+            dir: &'a Path,
+        ) -> BoxFut<'a, Result<Fetched, FetchError>> {
             let key = dir.file_name().unwrap().to_string_lossy().to_string();
-            let r = self.by_dir.lock().unwrap().get(&key).cloned().unwrap_or(Err(FetchError::Other("없음".into())));
+            let r = self
+                .by_dir
+                .lock()
+                .unwrap()
+                .get(&key)
+                .cloned()
+                .unwrap_or(Err(FetchError::Other("없음".into())));
             Box::pin(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
                 r
@@ -303,15 +335,36 @@ mod tests {
                 })
                 .collect();
             store.save_accounts(&accounts).unwrap();
-            let fetch = Arc::new(FakeFetch { by_dir: Mutex::new(HashMap::new()) });
+            let fetch = Arc::new(FakeFetch {
+                by_dir: Mutex::new(HashMap::new()),
+            });
             let sink = Arc::new(FakeSink::default());
             let clock = Arc::new(FakeClock(Mutex::new(t0())));
-            let checker = Arc::new(Checker::new(store, fetch.clone(), sink.clone(), clock.clone()));
-            Rig { _dir: dir, checker, fetch, sink, clock, accounts }
+            let checker = Arc::new(Checker::new(
+                store,
+                fetch.clone(),
+                sink.clone(),
+                clock.clone(),
+            ));
+            Rig {
+                _dir: dir,
+                checker,
+                fetch,
+                sink,
+                clock,
+                accounts,
+            }
         }
 
         fn set(&self, i: usize, r: Result<Fetched, FetchError>) {
-            let key = self.checker.store.account_dir(&self.accounts[i]).file_name().unwrap().to_string_lossy().to_string();
+            let key = self
+                .checker
+                .store
+                .account_dir(&self.accounts[i])
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
             self.fetch.by_dir.lock().unwrap().insert(key, r);
         }
 
@@ -320,7 +373,13 @@ mod tests {
         }
 
         fn titles(&self) -> Vec<String> {
-            self.sink.0.lock().unwrap().drain(..).map(|n| n.title).collect()
+            self.sink
+                .0
+                .lock()
+                .unwrap()
+                .drain(..)
+                .map(|n| n.title)
+                .collect()
         }
     }
 
@@ -328,9 +387,18 @@ mod tests {
         let grants = hours_left
             .iter()
             .enumerate()
-            .map(|(i, h)| Grant { id: format!("g{i}"), title: "Full reset".into(), expires_at: Some(t0() + Duration::hours(*h)), count: 1 })
+            .map(|(i, h)| Grant {
+                id: format!("g{i}"),
+                title: "Full reset".into(),
+                expires_at: Some(t0() + Duration::hours(*h)),
+                count: 1,
+            })
             .collect();
-        Ok(Fetched { grants, email: None, identity: None })
+        Ok(Fetched {
+            grants,
+            email: None,
+            identity: None,
+        })
     }
 
     #[tokio::test]
@@ -351,7 +419,13 @@ mod tests {
         r.set(0, Err(FetchError::Auth));
         r.advance(80);
         let views = r.checker.check_all().await;
-        assert_eq!(r.titles(), ["Codex(계정0) 재인증 필요", "Codex(계정0) 리셋권 24시간 남음"]);
+        assert_eq!(
+            r.titles(),
+            [
+                "Codex(계정0) 재인증 필요",
+                "Codex(계정0) 리셋권 24시간 남음"
+            ]
+        );
         assert_eq!(views[0].status, "auth");
         r.advance(81);
         r.checker.check_all().await;
@@ -365,7 +439,10 @@ mod tests {
         r.set(1, ok(&[100]));
         let views = r.checker.check_all().await;
         assert_eq!(r.titles(), ["Codex(계정1) 리셋권 1개 보유 중"]);
-        assert_eq!((views[0].status.as_str(), views[1].status.as_str()), ("error", "ok"));
+        assert_eq!(
+            (views[0].status.as_str(), views[1].status.as_str()),
+            ("error", "ok")
+        );
         assert_eq!(views[0].error.as_deref(), Some("시간 초과"));
     }
 
@@ -388,7 +465,10 @@ mod tests {
         r.set(0, ok(&[100]));
         r.set(1, ok(&[90]));
         r.checker.check_all().await;
-        assert_eq!(r.checker.next_wake().await, Some(t0() + Duration::hours(18)));
+        assert_eq!(
+            r.checker.next_wake().await,
+            Some(t0() + Duration::hours(18))
+        );
     }
 
     #[tokio::test]

@@ -44,19 +44,34 @@ pub fn command(exe: &Path) -> Command {
 }
 
 async fn output(mut cmd: Command, timeout: Duration) -> Result<String, CliError> {
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     let out = match tokio::time::timeout(timeout, cmd.output()).await {
         Err(_) => return Err(CliError::Timeout),
-        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => return Err(CliError::NotInstalled),
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(CliError::NotInstalled);
+        }
         Ok(Err(e)) => return Err(CliError::Exit(-1, e.to_string())),
         Ok(Ok(o)) => o,
     };
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        let tail: String = err.chars().rev().take(500).collect::<Vec<_>>().into_iter().rev().collect();
-        return Err(CliError::Exit(out.status.code().unwrap_or(-1), mask_secrets(&tail)));
+        let tail: String = err
+            .chars()
+            .rev()
+            .take(500)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        return Err(CliError::Exit(
+            out.status.code().unwrap_or(-1),
+            mask_secrets(&tail),
+        ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -133,14 +148,20 @@ mod tests {
     async fn run_json_times_out() {
         let mut c = tokio::process::Command::new("ping");
         c.args(["-n", "60", "127.0.0.1"]);
-        assert!(matches!(run_json(c, Duration::from_secs(1)).await, Err(CliError::Timeout)));
+        assert!(matches!(
+            run_json(c, Duration::from_secs(1)).await,
+            Err(CliError::Timeout)
+        ));
     }
 
     #[tokio::test]
     async fn nonzero_exit_is_exit_error() {
         let mut c = tokio::process::Command::new("cmd");
         c.args(["/c", "exit", "3"]);
-        assert!(matches!(run_json(c, Duration::from_secs(10)).await, Err(CliError::Exit(3, _))));
+        assert!(matches!(
+            run_json(c, Duration::from_secs(10)).await,
+            Err(CliError::Exit(3, _))
+        ));
     }
 
     #[test]

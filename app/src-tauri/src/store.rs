@@ -24,7 +24,10 @@ pub struct Account {
 
 impl Account {
     pub fn label(&self) -> String {
-        self.alias.clone().or_else(|| self.email.clone()).unwrap_or_else(|| "계정".into())
+        self.alias
+            .clone()
+            .or_else(|| self.email.clone())
+            .unwrap_or_else(|| "계정".into())
     }
 }
 
@@ -39,7 +42,9 @@ impl Store {
     }
 
     pub fn default_root() -> PathBuf {
-        let appdata = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+        let appdata = std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
         appdata.join("ResetNoti")
     }
 
@@ -69,7 +74,9 @@ impl Store {
 
     fn load<T: DeserializeOwned + Default>(&self, name: &str) -> T {
         let path = self.root.join(name);
-        let Ok(text) = std::fs::read_to_string(&path) else { return T::default() };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return T::default();
+        };
         match serde_json::from_str(&text) {
             Ok(v) => v,
             Err(e) => {
@@ -167,6 +174,11 @@ mod tests {
     fn account_dir_is_service_and_uuid() {
         let store = Store::open(std::path::PathBuf::from("R"));
         let a = acct(None, None);
-        assert_eq!(store.account_dir(&a), std::path::PathBuf::from("R").join("accounts").join(format!("codex-{}", a.id)));
+        assert_eq!(
+            store.account_dir(&a),
+            std::path::PathBuf::from("R")
+                .join("accounts")
+                .join(format!("codex-{}", a.id))
+        );
     }
 }
