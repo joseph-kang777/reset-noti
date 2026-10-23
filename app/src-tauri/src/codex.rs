@@ -183,10 +183,7 @@ mod tests {
     fn parses_only_available_credits() {
         let grants = parse_rate_limits(&fixture("codex_rate_limits.json"));
         assert_eq!(grants.len(), 2);
-        assert_eq!(
-            grants[0].id,
-            "RateLimitResetCredit_aaaa1111"
-        );
+        assert_eq!(grants[0].id, "RateLimitResetCredit_aaaa1111");
         assert_eq!(grants[0].title, "Full reset");
         assert_eq!(grants[0].count, 1);
         assert_eq!(

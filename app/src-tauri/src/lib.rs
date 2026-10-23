@@ -10,6 +10,7 @@ pub mod notify;
 pub mod rules;
 pub mod scheduler;
 pub mod store;
+pub mod updater;
 
 use std::sync::{Arc, Mutex};
 
@@ -68,7 +69,12 @@ fn setup_tray(app: &AppHandle, checker: Arc<Checker>) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, e| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = e
+            {
                 show_main(tray.app_handle());
             }
         })
@@ -81,19 +87,28 @@ pub fn run() {
     let store = Store::open(Store::default_root());
     let log_dir = store.root.clone();
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main(app)
+        }))
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
                 .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
-                .target(tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Folder {
-                    path: log_dir,
-                    file_name: Some("reset_noti".into()),
-                }))
+                .target(tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::Folder {
+                        path: log_dir,
+                        file_name: Some("reset_noti".into()),
+                    },
+                ))
                 .build(),
         )
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_autostart::Builder::new().args([MINIMIZED_ARG]).build())
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .args([MINIMIZED_ARG])
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -102,12 +117,26 @@ pub fn run() {
             if let Err(e) = notifier.register_app() {
                 log::warn!("알림 앱 등록 실패: {e}");
             }
-            let checker = Arc::new(Checker::new(store.clone(), Arc::new(CliFetcher), Arc::new(notifier), Arc::new(SystemClock)));
+            let notifier = Arc::new(notifier);
+            let checker = Arc::new(Checker::new(
+                store.clone(),
+                Arc::new(CliFetcher),
+                notifier.clone(),
+                Arc::new(SystemClock),
+            ));
+            updater::spawn(handle.clone(), notifier);
             init_autostart(&handle, &store);
             setup_tray(&handle, checker.clone())?;
             let emit_handle = handle.clone();
-            scheduler::spawn_loops(checker.clone(), Arc::new(move |views| commands::emit_accounts(&emit_handle, &views)));
-            app.manage(AppState { store: store.clone(), checker, login_cancel: Mutex::new(None) });
+            scheduler::spawn_loops(
+                checker.clone(),
+                Arc::new(move |views| commands::emit_accounts(&emit_handle, &views)),
+            );
+            app.manage(AppState {
+                store: store.clone(),
+                checker,
+                login_cancel: Mutex::new(None),
+            });
             if !std::env::args().any(|a| a == MINIMIZED_ARG) {
                 show_main(&handle);
             }
@@ -130,6 +159,8 @@ pub fn run() {
             commands::cli_status,
             commands::get_autostart,
             commands::set_autostart,
+            updater::install_update,
+            updater::check_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -8,7 +8,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::accounts::{self, CliLogin, LoginEvent, LOGIN_TIMEOUT};
+use crate::accounts::{self, CliLogin, LOGIN_TIMEOUT, LoginEvent};
 use crate::cli::resolve_cli;
 use crate::model::Service;
 use crate::scheduler::{AccountView, Checker};
@@ -67,17 +67,33 @@ pub async fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountView
 }
 
 #[tauri::command]
-pub async fn check_now(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<AccountView>, String> {
+pub async fn check_now(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<AccountView>, String> {
     let views = state.checker.check_all().await;
     emit_accounts(&app, &views);
     Ok(views)
 }
 
 #[tauri::command]
-pub async fn add_account(app: AppHandle, state: State<'_, AppState>, service: Service) -> Result<(), String> {
+pub async fn add_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    service: Service,
+) -> Result<(), String> {
     let token = new_login(&state);
     let sink = login_sink(app.clone());
-    accounts::add(&state.store, &CliLogin, service, token, LOGIN_TIMEOUT, &sink).await.map_err(|e| e.to_string())?;
+    accounts::add(
+        &state.store,
+        &CliLogin,
+        service,
+        token,
+        LOGIN_TIMEOUT,
+        &sink,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     emit_accounts(&app, &state.checker.views().await);
     recheck(&app, state.checker.clone());
     Ok(())
@@ -87,7 +103,9 @@ pub async fn add_account(app: AppHandle, state: State<'_, AppState>, service: Se
 pub async fn reauth(app: AppHandle, state: State<'_, AppState>, id: Uuid) -> Result<(), String> {
     let token = new_login(&state);
     let sink = login_sink(app.clone());
-    accounts::reauth(&state.store, &CliLogin, id, token, LOGIN_TIMEOUT, &sink).await.map_err(|e| e.to_string())?;
+    accounts::reauth(&state.store, &CliLogin, id, token, LOGIN_TIMEOUT, &sink)
+        .await
+        .map_err(|e| e.to_string())?;
     recheck(&app, state.checker.clone());
     Ok(())
 }
@@ -100,14 +118,23 @@ pub fn cancel_login(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-pub async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: Uuid) -> Result<(), String> {
+pub async fn remove_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: Uuid,
+) -> Result<(), String> {
     accounts::remove(&state.store, id).map_err(|e| e.to_string())?;
     emit_accounts(&app, &state.checker.views().await);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn rename_account(app: AppHandle, state: State<'_, AppState>, id: Uuid, alias: Option<String>) -> Result<(), String> {
+pub async fn rename_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: Uuid,
+    alias: Option<String>,
+) -> Result<(), String> {
     accounts::rename(&state.store, id, alias).map_err(|e| e.to_string())?;
     emit_accounts(&app, &state.checker.views().await);
     Ok(())
@@ -115,7 +142,10 @@ pub async fn rename_account(app: AppHandle, state: State<'_, AppState>, id: Uuid
 
 #[tauri::command]
 pub fn cli_status() -> CliStatus {
-    CliStatus { claude: resolve_cli("claude").is_some(), codex: resolve_cli("codex").is_some() }
+    CliStatus {
+        claude: resolve_cli("claude").is_some(),
+        codex: resolve_cli("codex").is_some(),
+    }
 }
 
 #[tauri::command]

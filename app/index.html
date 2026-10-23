@@ -9,6 +9,10 @@
   </head>
   <body>
     <main>
+      <div id="update" class="banner" hidden>
+        <span id="update-text"></span>
+        <button class="btn small" id="install-update">설치</button>
+      </div>
       <header class="top">
         <div>
           <h1>리셋권 알림</h1>
@@ -63,6 +67,17 @@
         </div>
         <div class="row end">
           <button class="btn ghost" id="cancel-login">취소</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="confirm" class="overlay" hidden>
+      <div class="dialog">
+        <h3 id="confirm-title"></h3>
+        <p class="muted" id="confirm-text"></p>
+        <div class="row end">
+          <button class="btn ghost" id="confirm-no">취소</button>
+          <button class="btn danger" id="confirm-yes">제거</button>
         </div>
       </div>
     </div>

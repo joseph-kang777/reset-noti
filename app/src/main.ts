@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ask } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 type Service = "claude" | "codex";
@@ -28,6 +27,21 @@ function showToast(text: string) {
   t.textContent = text;
   t.hidden = false;
   setTimeout(() => (t.hidden = true), 4000);
+}
+
+function confirmBox(title: string, text: string): Promise<boolean> {
+  const box = $<HTMLDivElement>("#confirm");
+  $<HTMLElement>("#confirm-title").textContent = title;
+  $<HTMLElement>("#confirm-text").textContent = text;
+  box.hidden = false;
+  return new Promise((resolve) => {
+    const done = (v: boolean) => {
+      box.hidden = true;
+      resolve(v);
+    };
+    $<HTMLButtonElement>("#confirm-yes").onclick = () => done(true);
+    $<HTMLButtonElement>("#confirm-no").onclick = () => done(false);
+  });
 }
 
 function line(a: AccountView): string {
@@ -75,7 +89,7 @@ function row(a: AccountView): HTMLLIElement {
   re.addEventListener("click", () => runLogin(a.service, () => invoke("reauth", { id: a.id }), "재인증했어요"));
   const rm = el("button", "btn small ghost", "제거");
   rm.addEventListener("click", async () => {
-    if (await ask(`${a.label} 계정을 제거할까요?\n이 앱에 저장된 로그인 정보가 삭제돼요.`, { title: "계정 제거", kind: "warning", okLabel: "제거", cancelLabel: "취소" })) {
+    if (await confirmBox(`${a.label} 계정을 제거할까요?`, "이 앱에 저장된 로그인 정보가 삭제돼요.")) {
       await invoke("remove_account", { id: a.id });
     }
   });
@@ -185,6 +199,25 @@ async function init() {
     $<HTMLDivElement>("#device").hidden = false;
     openUrl(deviceUrl);
   });
+
+  const showUpdate = (v: string) => {
+    $<HTMLElement>("#update-text").textContent = `새 버전 ${v}이(가) 있어요. 지금 설치할까요?`;
+    $<HTMLDivElement>("#update").hidden = false;
+  };
+  await listen<string>("update-available", (e) => showUpdate(e.payload));
+  $<HTMLButtonElement>("#install-update").addEventListener("click", async (e) => {
+    const b = e.currentTarget as HTMLButtonElement;
+    b.disabled = true;
+    b.textContent = "설치 중…";
+    try {
+      await invoke("install_update");
+    } catch (err) {
+      showToast(String(err));
+      b.disabled = false;
+      b.textContent = "설치";
+    }
+  });
+  invoke<string | null>("check_update").then((v) => v && showUpdate(v));
 
   render(await invoke<AccountView[]>("list_accounts"));
 }
