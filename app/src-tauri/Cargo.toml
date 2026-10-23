@@ -28,6 +28,7 @@ log = "0.4.34"
 tokio = { version = "1.54.1", features = ["process", "time", "io-util", "macros", "rt-multi-thread", "sync"] }
 which = "8.0.6"
 reqwest = { version = "0.13.5", default-features = false, features = ["native-tls", "json"] }
+tokio-util = "0.7.20"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

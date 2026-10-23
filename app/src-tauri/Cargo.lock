@@ -2888,6 +2888,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tempfile",
  "tokio",
+ "tokio-util",
  "uuid",
  "which",
  "windows",

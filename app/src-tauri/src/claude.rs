@@ -75,6 +75,12 @@ pub async fn ensure_fresh_with(dir: &Path, exe: &Path) -> Result<(), FetchError>
     }
 }
 
+/// (email, identity) — 계정 추가 직후 신원 확인용
+pub async fn whoami_dir(dir: &Path) -> Result<(String, String), FetchError> {
+    let exe = cli::resolve_cli("claude").ok_or(FetchError::NotInstalled)?;
+    whoami(dir, &exe).await
+}
+
 async fn whoami(dir: &Path, exe: &Path) -> Result<(String, String), FetchError> {
     let mut cmd = cli::command(exe);
     cmd.args(["auth", "status", "--json"]).env("CLAUDE_CONFIG_DIR", dir).current_dir(dir);
