@@ -1,6 +1,6 @@
 [package]
 name = "reset-noti"
-version = "0.1.0"
+version = "0.1.1"
 description = "Claude / Codex 리셋권 알림"
 authors = ["you"]
 edition = "2024"
