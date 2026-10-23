@@ -1,0 +1,9 @@
+{
+  "cedar_ember": {
+    "eligible": true,
+    "grants": [
+      { "grant_id": "g1", "kind": "weekly", "resets_left": 2, "expires_at": "2026-11-01T00:00:00+00:00" },
+      "g2"
+    ]
+  }
+}
