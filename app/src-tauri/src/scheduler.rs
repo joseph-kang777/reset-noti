@@ -1,4 +1,4 @@
-//! 확인 루프: 1시간마다 전체 확인 + 리셋권별 정각 만료 알림 + 절전 복귀 감지.
+//! 확인 루프: 1시간마다 전체 확인 + 리셋권별 정각 만료 알림 + 만료 1시간 전 자동 사용 + 절전 복귀 감지.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -10,10 +10,11 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::accounts::BoxFut;
+pub use crate::codex::ConsumeOutcome;
 use crate::fetch::{FetchError, Fetched};
 use crate::kst::{fmt_kst, kst_day};
 use crate::model::{Note, Service};
-use crate::rules::{expiry_notes, next_alert_at, on_fetch, total};
+use crate::rules::{auto_use_due, expiry_notes, next_alert_at, next_auto_use_at, on_fetch, total};
 use crate::store::Store;
 
 const CHECK_EVERY: StdDuration = StdDuration::from_secs(60 * 60);
@@ -23,6 +24,16 @@ const ACCOUNT_TIMEOUT: StdDuration = StdDuration::from_secs(150);
 
 pub trait Fetcher: Send + Sync {
     fn fetch<'a>(&'a self, svc: Service, dir: &'a Path) -> BoxFut<'a, Result<Fetched, FetchError>>;
+}
+
+/// 리셋권 사용 (Codex만 지원)
+pub trait Consumer: Send + Sync {
+    fn consume<'a>(
+        &'a self,
+        svc: Service,
+        dir: &'a Path,
+        credit_id: &'a str,
+    ) -> BoxFut<'a, Result<ConsumeOutcome, FetchError>>;
 }
 
 pub trait Sink: Send + Sync {
@@ -41,6 +52,23 @@ impl Fetcher for CliFetcher {
             match svc {
                 Service::Claude => crate::claude::fetch(dir).await,
                 Service::Codex => crate::codex::fetch(dir).await,
+            }
+        })
+    }
+}
+
+pub struct CliConsumer;
+impl Consumer for CliConsumer {
+    fn consume<'a>(
+        &'a self,
+        svc: Service,
+        dir: &'a Path,
+        credit_id: &'a str,
+    ) -> BoxFut<'a, Result<ConsumeOutcome, FetchError>> {
+        Box::pin(async move {
+            match svc {
+                Service::Codex => crate::codex::consume(dir, credit_id).await,
+                Service::Claude => Err(FetchError::Other("Claude는 자동 사용 미지원".into())),
             }
         })
     }
@@ -75,6 +103,8 @@ pub struct AccountView {
     pub status: String,
     pub error: Option<String>,
     pub last_ok: Option<String>,
+    /// 만료 1시간 전 자동 사용 (Codex만 의미 있음)
+    pub auto_use: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +121,7 @@ pub struct Checker {
     fetcher: Arc<dyn Fetcher>,
     sink: Arc<dyn Sink>,
     clock: Arc<dyn Clock>,
+    consumer: Arc<dyn Consumer>,
 }
 
 impl Checker {
@@ -99,6 +130,7 @@ impl Checker {
         fetcher: Arc<dyn Fetcher>,
         sink: Arc<dyn Sink>,
         clock: Arc<dyn Clock>,
+        consumer: Arc<dyn Consumer>,
     ) -> Checker {
         Checker {
             store,
@@ -107,6 +139,7 @@ impl Checker {
             fetcher,
             sink,
             clock,
+            consumer,
         }
     }
 
@@ -158,7 +191,7 @@ impl Checker {
         self.views_from(&state)
     }
 
-    /// 캐시 기준으로 지금 해당하는 만료 알림만 보낸다 (조회 없음)
+    /// 캐시 기준으로 지금 해당하는 만료 알림·자동 사용만 처리한다 (조회 없음)
     pub async fn fire_due(&self) {
         let _guard = self.lock.lock().await;
         let now = self.clock.now();
@@ -168,7 +201,41 @@ impl Checker {
             let Some(st) = state.get_mut(&a.id) else {
                 continue;
             };
-            for n in expiry_notes(st, a.service, &a.label(), now) {
+            let label = a.label();
+            let mut notes = expiry_notes(st, a.service, &label, now);
+            if a.service == Service::Codex && a.auto_use {
+                let dir = self.store.account_dir(&a);
+                for id in auto_use_due(st, now) {
+                    // 실패하면 알리지 않고 다음 깨어날 때 같은 키로 재시도
+                    let skipped = match self.consumer.consume(a.service, &dir, &id).await {
+                        Ok(ConsumeOutcome::Reset) => None,
+                        Ok(ConsumeOutcome::NothingToReset) => Some("초기화할 사용량이 없습니다."),
+                        Ok(ConsumeOutcome::NoCredit) => Some("쓸 수 있는 리셋권이 없습니다."),
+                        Err(e) => {
+                            log::warn!("{label}: 리셋권 자동 사용 실패: {e}");
+                            continue;
+                        }
+                    };
+                    notes.push(match skipped {
+                        None => {
+                            st.cache.retain(|g| g.id != id);
+                            Note {
+                                title: format!(
+                                    "{}({label}) 리셋권 자동 사용함",
+                                    a.service.display()
+                                ),
+                                body: "만료 1시간 전이라 사용량을 초기화했습니다.".into(),
+                            }
+                        }
+                        Some(why) => Note {
+                            title: format!("{}({label}) 리셋권 사용 안 됨", a.service.display()),
+                            body: why.into(),
+                        },
+                    });
+                    st.auto_used.insert(id);
+                }
+            }
+            for n in notes {
                 changed = true;
                 log::info!("알림: {} | {}", n.title, n.body);
                 self.sink.toast(a.service, &n);
@@ -184,10 +251,24 @@ impl Checker {
     pub async fn next_wake(&self) -> Option<DateTime<Utc>> {
         let _guard = self.lock.lock().await;
         let now = self.clock.now();
+        let auto: Vec<Uuid> = self
+            .store
+            .load_accounts()
+            .into_iter()
+            .filter(|a| a.service == Service::Codex && a.auto_use)
+            .map(|a| a.id)
+            .collect();
         self.store
             .load_state()
-            .values()
-            .filter_map(|st| next_alert_at(st, now))
+            .iter()
+            .flat_map(|(id, st)| {
+                let auto_at = auto
+                    .contains(id)
+                    .then(|| next_auto_use_at(st, now))
+                    .flatten();
+                [next_alert_at(st, now), auto_at]
+            })
+            .flatten()
             .min()
     }
 
@@ -227,6 +308,7 @@ impl Checker {
                     status: status.into(),
                     error,
                     last_ok: st.and_then(|s| s.last_ok).map(fmt_kst),
+                    auto_use: a.auto_use,
                 }
             })
             .collect()
@@ -305,6 +387,30 @@ mod tests {
         }
     }
 
+    /// 실제 리셋권을 쓰지 않는 가짜 — 호출 기록만 남긴다
+    #[derive(Default)]
+    struct FakeConsumer {
+        calls: Mutex<Vec<String>>,
+        result: Mutex<Option<Result<ConsumeOutcome, FetchError>>>,
+    }
+    impl Consumer for FakeConsumer {
+        fn consume<'a>(
+            &'a self,
+            _svc: Service,
+            _dir: &'a Path,
+            credit_id: &'a str,
+        ) -> BoxFut<'a, Result<ConsumeOutcome, FetchError>> {
+            self.calls.lock().unwrap().push(credit_id.to_string());
+            let r = self
+                .result
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or(Ok(ConsumeOutcome::Reset));
+            Box::pin(async move { r })
+        }
+    }
+
     #[derive(Default)]
     struct FakeSink(Mutex<Vec<Note>>);
     impl Sink for FakeSink {
@@ -326,6 +432,7 @@ mod tests {
         fetch: Arc<FakeFetch>,
         sink: Arc<FakeSink>,
         clock: Arc<FakeClock>,
+        consumer: Arc<FakeConsumer>,
         accounts: Vec<Account>,
     }
 
@@ -341,6 +448,7 @@ mod tests {
                     email: Some(format!("{i}@x")),
                     identity: Some(format!("id{i}")),
                     added_at: t0(),
+                    auto_use: true,
                 })
                 .collect();
             store.save_accounts(&accounts).unwrap();
@@ -350,11 +458,13 @@ mod tests {
             });
             let sink = Arc::new(FakeSink::default());
             let clock = Arc::new(FakeClock(Mutex::new(t0())));
+            let consumer = Arc::new(FakeConsumer::default());
             let checker = Arc::new(Checker::new(
                 store,
                 fetch.clone(),
                 sink.clone(),
                 clock.clone(),
+                consumer.clone(),
             ));
             Rig {
                 _dir: dir,
@@ -362,6 +472,7 @@ mod tests {
                 fetch,
                 sink,
                 clock,
+                consumer,
                 accounts,
             }
         }
@@ -490,9 +601,15 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         let id = r.accounts[0].id;
         let store = r.checker.store.clone();
-        r.checker.exclusive(move || crate::accounts::remove(&store, id)).await.unwrap();
+        r.checker
+            .exclusive(move || crate::accounts::remove(&store, id))
+            .await
+            .unwrap();
         running.await.unwrap();
-        assert!(r.checker.store.load_state().is_empty(), "제거한 계정 상태가 되살아남");
+        assert!(
+            r.checker.store.load_state().is_empty(),
+            "제거한 계정 상태가 되살아남"
+        );
     }
 
     #[tokio::test]
@@ -503,7 +620,8 @@ mod tests {
         let c = r.checker.clone();
         let running = tokio::spawn(async move { c.check_all().await });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let v = tokio::time::timeout(std::time::Duration::from_millis(200), r.checker.views()).await;
+        let v =
+            tokio::time::timeout(std::time::Duration::from_millis(200), r.checker.views()).await;
         assert!(v.is_ok(), "확인 중에 화면 목록이 막힘");
         running.await.unwrap();
     }
@@ -519,6 +637,95 @@ mod tests {
         r.set(0, Err(FetchError::Auth));
         r.checker.check_all().await;
         assert_eq!(r.titles(), ["Codex(계정0) 재인증 필요"]);
+    }
+
+    #[tokio::test]
+    async fn auto_use_fires_once_one_hour_before_expiry() {
+        let r = Rig::new(1);
+        r.set(0, ok(&[100]));
+        r.checker.check_all().await;
+        r.titles();
+        r.advance(98);
+        r.checker.fire_due().await;
+        assert!(r.consumer.calls.lock().unwrap().is_empty());
+        r.titles();
+        r.advance(99);
+        r.checker.fire_due().await;
+        assert_eq!(*r.consumer.calls.lock().unwrap(), ["g0"]);
+        assert_eq!(r.titles(), ["Codex(계정0) 리셋권 자동 사용함"]);
+        r.checker.fire_due().await;
+        assert_eq!(
+            r.consumer.calls.lock().unwrap().len(),
+            1,
+            "두 번 쓰면 안 됨"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_use_off_does_not_consume() {
+        let r = Rig::new(1);
+        let mut accts = r.checker.store.load_accounts();
+        accts[0].auto_use = false;
+        r.checker.store.save_accounts(&accts).unwrap();
+        r.set(0, ok(&[100]));
+        r.checker.check_all().await;
+        r.advance(99);
+        r.checker.fire_due().await;
+        assert!(r.consumer.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn auto_use_error_retries_next_time() {
+        let r = Rig::new(1);
+        r.set(0, ok(&[100]));
+        r.checker.check_all().await;
+        *r.consumer.result.lock().unwrap() = Some(Err(FetchError::Other("네트워크".into())));
+        r.advance(99);
+        r.checker.fire_due().await;
+        *r.consumer.result.lock().unwrap() = None;
+        r.checker.fire_due().await;
+        assert_eq!(r.consumer.calls.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn nothing_to_reset_is_reported_and_not_retried() {
+        let r = Rig::new(1);
+        r.set(0, ok(&[100]));
+        r.checker.check_all().await;
+        *r.consumer.result.lock().unwrap() = Some(Ok(ConsumeOutcome::NothingToReset));
+        r.advance(98);
+        r.checker.fire_due().await;
+        r.titles();
+        r.advance(99);
+        r.checker.fire_due().await;
+        assert_eq!(r.titles(), ["Codex(계정0) 리셋권 사용 안 됨"]);
+        r.checker.fire_due().await;
+        assert_eq!(r.consumer.calls.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn claude_accounts_never_auto_use() {
+        let r = Rig::new(1);
+        let mut accts = r.checker.store.load_accounts();
+        accts[0].service = Service::Claude;
+        r.checker.store.save_accounts(&accts).unwrap();
+        r.set(0, ok(&[100]));
+        r.checker.check_all().await;
+        r.advance(99);
+        r.checker.fire_due().await;
+        assert!(r.consumer.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn next_wake_includes_auto_use_time() {
+        let r = Rig::new(1);
+        r.set(0, ok(&[100]));
+        r.checker.check_all().await;
+        r.advance(77);
+        assert_eq!(
+            r.checker.next_wake().await,
+            Some(t0() + chrono::Duration::hours(99))
+        );
     }
 
     #[tokio::test]

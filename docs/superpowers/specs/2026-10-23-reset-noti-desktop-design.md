@@ -24,7 +24,7 @@ Claude(Anthropic)와 Codex(OpenAI)는 사용량 한도를 즉시 초기화해 �
 - 여러 사람의 정보를 서버에 모으지 않는다.
 
 **안티목표** (동작하더라도 실패로 본다)
-- 리셋권을 **사용(consume)하는** 요청을 보내면 안 된다. 앱은 조회만 한다.
+- 리셋권 사용(consume)은 **Codex 자동 사용** 한 경우에만 한다: 계정별 토글(기본 켜짐)이 켜져 있으면 리셋권 만료 1시간 전~만료 사이에 `account/rateLimitResetCredit/consume`을 리셋권 id + 고정 키(`reset-noti-auto:<id>`)로 한 번 보낸다. 오류면 같은 키로 재시도, 결과(`reset`/`nothingToReset`/`noCredit`)가 오면 다시 쓰지 않는다. 사용 코드는 `codex.rs`에만 둔다(`tests/no_consume.rs` 가드). Claude는 조회만 한다.
 - 토큰이 로그, 화면, 알림에 노출되면 안 된다.
 - 앱이 사용자의 기존 `~/.claude`나 `~/.codex` 로그인 상태를 바꾸거나 망가뜨리면 안 된다.
 - 같은 알림이 반복해서 뜨면 안 된다.

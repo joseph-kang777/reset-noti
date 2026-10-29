@@ -107,7 +107,11 @@ pub async fn reauth(app: AppHandle, state: State<'_, AppState>, id: Uuid) -> Res
         .await
         .map_err(|e| e.to_string())?;
     let store = state.store.clone();
-    state.checker.exclusive(move || pending.commit(&store)).await.map_err(|e| e.to_string())?;
+    state
+        .checker
+        .exclusive(move || pending.commit(&store))
+        .await
+        .map_err(|e| e.to_string())?;
     recheck(&app, state.checker.clone());
     Ok(())
 }
@@ -120,9 +124,17 @@ pub fn cancel_login(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-pub async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: Uuid) -> Result<(), String> {
+pub async fn remove_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: Uuid,
+) -> Result<(), String> {
     let store = state.store.clone();
-    state.checker.exclusive(move || accounts::remove(&store, id)).await.map_err(|e| e.to_string())?;
+    state
+        .checker
+        .exclusive(move || accounts::remove(&store, id))
+        .await
+        .map_err(|e| e.to_string())?;
     emit_accounts(&app, &state.checker.views().await);
     Ok(())
 }
@@ -135,6 +147,18 @@ pub async fn rename_account(
     alias: Option<String>,
 ) -> Result<(), String> {
     accounts::rename(&state.store, id, alias).map_err(|e| e.to_string())?;
+    emit_accounts(&app, &state.checker.views().await);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_auto_use(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: Uuid,
+    enabled: bool,
+) -> Result<(), String> {
+    accounts::set_auto_use(&state.store, id, enabled).map_err(|e| e.to_string())?;
     emit_accounts(&app, &state.checker.views().await);
     Ok(())
 }

@@ -15,6 +15,7 @@ interface AccountView {
   status: "ok" | "auth" | "error" | "unknown";
   error: string | null;
   last_ok: string | null;
+  auto_use: boolean;
 }
 
 const SECURITY_URL = "https://chatgpt.com/#settings/Security";
@@ -83,6 +84,7 @@ function row(a: AccountView): HTMLLIElement {
   const detail = el("div", "detail", line(a));
   info.append(name, detail);
   if (a.last_ok) info.append(el("div", "sub muted", `마지막 확인 ${a.last_ok}`));
+  if (a.service === "codex") info.append(autoUseToggle(a));
 
   const actions = el("div", "actions");
   const re = el("button", "btn small", "재인증");
@@ -96,6 +98,17 @@ function row(a: AccountView): HTMLLIElement {
   actions.append(re, rm);
   li.append(info, actions);
   return li;
+}
+
+function autoUseToggle(a: AccountView): HTMLElement {
+  const label = el("label", "switch sub");
+  label.title = "리셋권 만료 1시간 전에 자동으로 사용해 사용량을 초기화해요";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = a.auto_use;
+  box.addEventListener("change", () => invoke("set_auto_use", { id: a.id, enabled: box.checked }));
+  label.append(box, el("span", "", "만료 1시간 전 자동 사용"));
+  return label;
 }
 
 function editAlias(a: AccountView, span: HTMLElement) {

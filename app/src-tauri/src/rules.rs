@@ -155,6 +155,30 @@ pub fn next_alert_at(st: &AccountState, now: DateTime<Utc>) -> Option<DateTime<U
         .min()
 }
 
+const AUTO_USE_BEFORE_H: i64 = 1;
+
+/// 만료 1시간 전 ~ 만료 사이이고 아직 자동 사용하지 않은 리셋권 id
+pub fn auto_use_due(st: &AccountState, now: DateTime<Utc>) -> Vec<String> {
+    st.cache
+        .iter()
+        .filter(|g| !st.auto_used.contains(&g.id))
+        .filter_map(|g| {
+            let exp = g.expires_at?;
+            (now >= exp - Duration::hours(AUTO_USE_BEFORE_H) && now < exp).then(|| g.id.clone())
+        })
+        .collect()
+}
+
+/// 다음 자동 사용 시각 (now 이후)
+pub fn next_auto_use_at(st: &AccountState, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    st.cache
+        .iter()
+        .filter(|g| !st.auto_used.contains(&g.id))
+        .filter_map(|g| g.expires_at.map(|e| e - Duration::hours(AUTO_USE_BEFORE_H)))
+        .filter(|at| *at > now)
+        .min()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,5 +367,31 @@ mod tests {
     #[test]
     fn total_sums_counts() {
         assert_eq!(total(&[gc("a", 1, 2), gc("b", 1, 1)]), 3);
+    }
+
+    #[test]
+    fn auto_use_due_only_in_last_hour_once() {
+        let mut st = AccountState::default();
+        fetch(&mut st, &[g("a", 100), g("b", 300)], now());
+        assert!(auto_use_due(&st, now() + Duration::minutes(98 * 60 + 59)).is_empty());
+        assert_eq!(auto_use_due(&st, now() + Duration::hours(99)), ["a"]);
+        st.auto_used.insert("a".into());
+        assert!(auto_use_due(&st, now() + Duration::hours(99)).is_empty());
+        assert!(
+            auto_use_due(&st, now() + Duration::hours(100)).is_empty(),
+            "만료 후엔 안 씀"
+        );
+    }
+
+    #[test]
+    fn next_auto_use_at_is_one_hour_before_expiry() {
+        let mut st = AccountState::default();
+        fetch(&mut st, &[g("a", 100)], now());
+        assert_eq!(
+            next_auto_use_at(&st, now()),
+            Some(now() + Duration::hours(99))
+        );
+        st.auto_used.insert("a".into());
+        assert_eq!(next_auto_use_at(&st, now()), None);
     }
 }

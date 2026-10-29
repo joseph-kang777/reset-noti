@@ -22,49 +22,111 @@ pub async fn fetch(dir: &Path) -> Result<Fetched, FetchError> {
         .map_err(|_| FetchError::Other("시간 초과".into()))?
 }
 
-async fn rpc(exe: &Path, dir: &Path) -> Result<Fetched, FetchError> {
-    let mut cmd = cli::command(exe);
-    cmd.arg("app-server")
-        .env("CODEX_HOME", dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let (mut child, _job) =
-        cli::spawn(&mut cmd).map_err(|e| FetchError::Other(format!("codex 실행 실패: {e}")))?;
-    let mut stdin = child.stdin.take().unwrap();
-    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+/// 초기화까지 끝난 app-server 세션. drop되면 Job이 프로세스 트리를 정리한다.
+struct Session {
+    child: tokio::process::Child,
+    _job: Option<cli::JobGuard>,
+    stdin: ChildStdin,
+    lines: Lines<BufReader<ChildStdout>>,
+    next_id: u64,
+}
 
-    call(
-        &mut stdin,
-        &mut lines,
-        1,
-        "initialize",
-        json!({"clientInfo": {"name": "reset-noti", "version": env!("CARGO_PKG_VERSION")}}),
-    )
-    .await?;
-    send(
-        &mut stdin,
-        json!({"jsonrpc": "2.0", "method": "initialized"}),
-    )
-    .await?;
-    let (email, identity) =
-        parse_account(&call(&mut stdin, &mut lines, 2, "account/read", json!({})).await?)?;
-    let grants = parse_rate_limits(
-        &call(
-            &mut stdin,
-            &mut lines,
-            3,
-            "account/rateLimits/read",
-            Value::Null,
+impl Session {
+    async fn open(exe: &Path, dir: &Path) -> Result<Session, FetchError> {
+        let mut cmd = cli::command(exe);
+        cmd.arg("app-server")
+            .env("CODEX_HOME", dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let (mut child, job) =
+            cli::spawn(&mut cmd).map_err(|e| FetchError::Other(format!("codex 실행 실패: {e}")))?;
+        let stdin = child.stdin.take().unwrap();
+        let lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut s = Session {
+            child,
+            _job: job,
+            stdin,
+            lines,
+            next_id: 1,
+        };
+        s.call(
+            "initialize",
+            json!({"clientInfo": {"name": "reset-noti", "version": env!("CARGO_PKG_VERSION")}}),
         )
-        .await?,
-    );
-    let _ = child.kill().await;
+        .await?;
+        send(
+            &mut s.stdin,
+            json!({"jsonrpc": "2.0", "method": "initialized"}),
+        )
+        .await?;
+        Ok(s)
+    }
+
+    async fn call(&mut self, method: &str, params: Value) -> Result<Value, FetchError> {
+        let id = self.next_id;
+        self.next_id += 1;
+        call(&mut self.stdin, &mut self.lines, id, method, params).await
+    }
+
+    async fn close(mut self) {
+        let _ = self.child.kill().await;
+    }
+}
+
+async fn rpc(exe: &Path, dir: &Path) -> Result<Fetched, FetchError> {
+    let mut s = Session::open(exe, dir).await?;
+    let (email, identity) = parse_account(&s.call("account/read", json!({})).await?)?;
+    let grants = parse_rate_limits(&s.call("account/rateLimits/read", Value::Null).await?);
+    s.close().await;
     Ok(Fetched {
         grants,
         email: Some(email),
         identity: Some(identity),
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsumeOutcome {
+    /// 리셋권을 써서 사용량이 초기화됨 (같은 키로 이미 성공한 경우 포함)
+    Reset,
+    /// 초기화할 사용량이 없음
+    NothingToReset,
+    /// 쓸 수 있는 리셋권이 없음
+    NoCredit,
+}
+
+/// 리셋권 하나를 사용한다. 키가 리셋권마다 고정이라 재시도해도 두 번 쓰이지 않는다.
+pub async fn consume(dir: &Path, credit_id: &str) -> Result<ConsumeOutcome, FetchError> {
+    let exe = cli::resolve_cli("codex").ok_or(FetchError::NotInstalled)?;
+    tokio::time::timeout(TIMEOUT, async {
+        let mut s = Session::open(&exe, dir).await?;
+        let r = s
+            .call(
+                "account/rateLimitResetCredit/consume",
+                consume_params(credit_id),
+            )
+            .await;
+        s.close().await;
+        parse_consume(&r?)
+    })
+    .await
+    .map_err(|_| FetchError::Other("시간 초과".into()))?
+}
+
+pub fn consume_params(credit_id: &str) -> Value {
+    json!({"creditId": credit_id, "idempotencyKey": format!("reset-noti-auto:{credit_id}")})
+}
+
+pub fn parse_consume(v: &Value) -> Result<ConsumeOutcome, FetchError> {
+    match v.get("outcome").and_then(Value::as_str) {
+        Some("reset" | "alreadyRedeemed") => Ok(ConsumeOutcome::Reset),
+        Some("nothingToReset") => Ok(ConsumeOutcome::NothingToReset),
+        Some("noCredit") => Ok(ConsumeOutcome::NoCredit),
+        other => Err(FetchError::Other(format!(
+            "알 수 없는 사용 결과: {other:?}"
+        ))),
+    }
 }
 
 async fn send(stdin: &mut ChildStdin, msg: Value) -> Result<(), FetchError> {
@@ -201,6 +263,26 @@ mod tests {
     #[test]
     fn null_credits_is_empty() {
         assert!(parse_rate_limits(&serde_json::json!({"rateLimitResetCredits": null})).is_empty());
+    }
+
+    #[test]
+    fn consume_params_use_credit_and_stable_key() {
+        let p = consume_params("RateLimitResetCredit_x");
+        assert_eq!(p["creditId"], "RateLimitResetCredit_x");
+        assert_eq!(
+            p["idempotencyKey"],
+            "reset-noti-auto:RateLimitResetCredit_x"
+        );
+    }
+
+    #[test]
+    fn parses_consume_outcomes() {
+        let o = |s: &str| parse_consume(&serde_json::json!({ "outcome": s }));
+        assert_eq!(o("reset"), Ok(ConsumeOutcome::Reset));
+        assert_eq!(o("nothingToReset"), Ok(ConsumeOutcome::NothingToReset));
+        assert_eq!(o("noCredit"), Ok(ConsumeOutcome::NoCredit));
+        assert_eq!(o("alreadyRedeemed"), Ok(ConsumeOutcome::Reset));
+        assert!(o("weird").is_err());
     }
 
     #[test]

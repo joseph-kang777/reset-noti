@@ -20,6 +20,13 @@ pub struct Account {
     /// 중복 판별용 (Claude: orgId+email, Codex: chatgptAccountId+email)
     pub identity: Option<String>,
     pub added_at: DateTime<Utc>,
+    /// 만료 1시간 전 자동 사용 (Codex만, 기본 켜짐)
+    #[serde(default = "default_true")]
+    pub auto_use: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Account {
@@ -119,6 +126,7 @@ mod tests {
             email: email.map(Into::into),
             identity: None,
             added_at: Utc::now(),
+            auto_use: true,
         }
     }
 
@@ -161,6 +169,14 @@ mod tests {
         assert!(store.load_accounts().is_empty());
         assert!(dir.path().join("accounts.json.bak").exists());
         assert!(!dir.path().join("accounts.json").exists());
+    }
+
+    #[test]
+    fn auto_use_defaults_on_for_old_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = r#"[{"id":"00000000-0000-0000-0000-000000000001","service":"codex","alias":null,"email":null,"identity":null,"added_at":"2026-10-23T00:00:00Z"}]"#;
+        std::fs::write(dir.path().join("accounts.json"), json).unwrap();
+        assert!(Store::open(dir.path().to_path_buf()).load_accounts()[0].auto_use);
     }
 
     #[test]

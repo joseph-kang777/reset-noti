@@ -20,7 +20,7 @@ use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_autostart::ManagerExt;
 
 use commands::AppState;
-use scheduler::{Checker, CliFetcher, SystemClock};
+use scheduler::{Checker, CliConsumer, CliFetcher, SystemClock};
 use store::Store;
 
 const MINIMIZED_ARG: &str = "--minimized";
@@ -123,6 +123,7 @@ pub fn run() {
                 Arc::new(CliFetcher),
                 notifier.clone(),
                 Arc::new(SystemClock),
+                Arc::new(CliConsumer),
             ));
             updater::spawn(handle.clone(), notifier);
             init_autostart(&handle, &store);
@@ -156,6 +157,7 @@ pub fn run() {
             commands::cancel_login,
             commands::remove_account,
             commands::rename_account,
+            commands::set_auto_use,
             commands::cli_status,
             commands::get_autostart,
             commands::set_autostart,

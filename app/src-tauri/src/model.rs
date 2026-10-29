@@ -53,4 +53,7 @@ pub struct AccountState {
     pub initialized: bool,
     /// 인증 실패 알림을 보낸 KST 날짜 (YYYY-MM-DD)
     pub auth_fail_day: Option<String>,
+    /// 자동 사용을 끝낸 리셋권 id (성공·사용 불가 모두)
+    #[serde(default)]
+    pub auto_used: BTreeSet<String>,
 }
