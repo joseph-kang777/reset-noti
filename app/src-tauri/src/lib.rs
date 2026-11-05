@@ -35,6 +35,10 @@ fn show_main(app: &AppHandle) {
 
 /// 최초 실행 시 자동 시작을 켠다 (이후엔 사용자 설정을 따름)
 fn init_autostart(app: &AppHandle, store: &Store) {
+    // 개발 빌드(target\debug)가 자동 시작에 등록되면 부팅 때마다 콘솔 창이 뜬다
+    if cfg!(debug_assertions) {
+        return;
+    }
     let flag = store.root.join("autostart_initialized");
     if flag.exists() {
         return;
